@@ -1,0 +1,319 @@
+
+#include "FastLED.h" // FastLED library.
+#if FASTLED_VERSION < 3001000
+#error "Requires FastLED 3.1 or later; check github for latest code."
+#endif
+
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
+int led_mode = 0;
+
+// BLE Callback
+class MyCallbacks : public BLECharacteristicCallbacks
+{
+    void onWrite(BLECharacteristic *pCharacteristic)
+    {
+        std::string value = pCharacteristic->getValue();
+
+        if (value.length() > 0)
+        {
+            Serial.println("*********");
+            Serial.print("New value: ");
+            //for (int i = 0; i < value.length(); i++)
+            Serial.print(value[0]);
+            Serial.println();
+            Serial.println("*********");
+
+            led_mode = (int)value[0];
+        }
+    }
+};
+
+
+#include "jcbutton.h" // https://github.com/JChristensen/Button
+#include "EEPROM.h"
+
+#define BUTTON_PIN 6   // Connect a button or something similar from Arduino pin 6 to ground.
+#define PULLUP true    // To keep things simple, we use the Arduino's internal pullup resistor.
+#define INVERT true    // Since the pullup resistor will keep the pin high unless the \
+                       // switch is closed, this is negative logic, i.e. a high state \
+                       // means the button is NOT pressed. (Assuming a normally open switch.)
+#define DEBOUNCE_MS 50 // A debounce time of 20 milliseconds usually works well for tactile button switches.
+
+Button myBtn(BUTTON_PIN, PULLUP, INVERT, DEBOUNCE_MS); // Declare the button.
+boolean longpress;
+
+uint8_t ledMode = 0;
+uint8_t maxMode = 6;
+
+int eepaddress = 0;
+
+// Fixed definitions cannot change on the fly.
+#define LED_DT 15       // Data pin to connect to the strip.
+#define LED_CK 11       // Clock pin for the strip.
+#define COLOR_ORDER BGR // Are they RGB, GRB or what??
+#define LED_TYPE WS2812B // Don't forget to change LEDS.addLeds
+#define NUM_LEDS 60     // Number of LED's.
+
+// Initialize changeable global variables.
+uint8_t max_bright = 192; // Overall brightness definition. It can be changed on the fly.
+
+struct CRGB leds[NUM_LEDS]; // Initialize our LED array.
+
+CRGBPalette16 currentPalette;
+CRGBPalette16 targetPalette;
+TBlendType currentBlending; // NOBLEND or LINEARBLEND
+
+// Define variables used by the sequences.
+uint8_t thisfade = 8;  // How quickly does it fade? Lower = slower fade rate.
+int thishue = 50;      // Starting hue.
+uint8_t thisinc = 1;   // Incremental value for rotating hues
+uint8_t thissat = 100; // The saturation, where 255 = brilliant colours.
+uint8_t thisbri = 255; // Brightness of a sequence. Remember, max_bright is the overall limiter.
+int huediff = 256;     // Range of random #'s to use for hue
+//uint8_t thisdelay = 5; // We don't need much delay (if any)
+
+// dot_beat// Define variables used by the sequences.
+int thisdelay = 10;    // A delay value for the sequence(s)
+uint8_t count = 0;     // Count up to 255 and then reverts to 0
+uint8_t fadeval = 224; // Trail behind the LED's. Lower => faster fade.
+
+uint8_t bpm = 30;
+
+// blendwawe
+CRGB clr1;
+CRGB clr2;
+uint8_t speed;
+uint8_t loc1;
+uint8_t loc2;
+uint8_t ran1;
+uint8_t ran2;
+
+
+void setup()
+{
+
+    Serial.begin(115200); // Initialize serial port for debugging.
+    delay(1000);         // Soft startup to ease the flow of electrons.
+
+    ledMode = EEPROM.read(eepaddress);
+    Serial.print("Starting ledMode: ");
+    Serial.println(ledMode);
+
+    LEDS.addLeds<LED_TYPE, LED_DT, COLOR_ORDER>(leds, NUM_LEDS);    // Use this for WS2812B
+    //LEDS.addLeds<LED_TYPE, LED_DT, LED_CK, COLOR_ORDER>(leds, NUM_LEDS); // Use this for WS2801 or APA102
+
+    currentBlending = LINEARBLEND;
+
+    FastLED.setBrightness(max_bright/2);
+    set_max_power_in_volts_and_milliamps(5, 1000); // FastLED power management set at 5V, 500mA.
+
+    BLEDevice::init("MyESP32");
+    BLEServer *pServer = BLEDevice::createServer();
+
+    BLEService *pService = pServer->createService(SERVICE_UUID);
+
+    BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+        CHARACTERISTIC_UUID,
+        BLECharacteristic::PROPERTY_READ |
+            BLECharacteristic::PROPERTY_WRITE);
+
+    pCharacteristic->setCallbacks(new MyCallbacks());
+
+    pCharacteristic->setValue("Hello World");
+    pService->start();
+
+    BLEAdvertising *pAdvertising = pServer->getAdvertising();
+    pAdvertising->start();
+
+    //     readbutton();
+
+} // setup()
+
+
+void loop()
+{
+    CheckMode(led_mode);
+    FastLED.show();
+    
+} // loop()
+
+void CheckMode(int cur_mode)
+{
+    if (cur_mode == 0)
+    {
+    }
+    
+    if (cur_mode == 1)
+    {
+        dot_beat();
+    }
+    if (cur_mode == 2)
+    {
+        ChangeMe(); // Check the demo loop for changes to the variables.
+        EVERY_N_MILLISECONDS(100)
+        {
+            uint8_t maxChanges = 24;
+            nblendPaletteTowardPalette(currentPalette, targetPalette, maxChanges); // AWESOME palette blending capability.
+        }
+        EVERY_N_MILLISECONDS(thisdelay)
+        { // FastLED based non-blocking delay to update/display the sequence.
+            confetti_pal();
+        }
+    }
+    if (cur_mode == 3)
+    {
+        blendwave();
+    }
+    if (cur_mode == 4)
+    {
+        fill_grad();
+    }
+    if (cur_mode == 5)
+    {
+        animationA();
+    }
+}
+void fill_black()
+{
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+}
+
+void confetti_pal()
+{ // random colored speckles that blink in and fade smoothly
+    fadeToBlackBy(leds, NUM_LEDS, thisfade); // Low values = slower fade.
+    int pos = random16(NUM_LEDS);            // Pick an LED at random.
+    leds[pos] = ColorFromPalette(currentPalette, thishue + random16(huediff) / 4, thisbri, currentBlending);
+    thishue = thishue + thisinc; // It increments here.
+
+} // confetti_pal()
+
+
+
+void ChangeMe()
+{ // A time (rather than loop) based demo sequencer. This gives us full control over the length of each sequence.
+
+    uint8_t secondHand = (millis() / 1000) % 20; // IMPORTANT!!! Change '15' to a different value to change duration of the loop.
+    static uint8_t lastSecond = 99;              // Static variable, means it's only defined once. This is our 'debounce' variable.
+    if (lastSecond != secondHand)
+    { // Debounce to make sure we're not repeating an assignment.
+        lastSecond = secondHand;
+        switch (secondHand)
+        {
+        case 0:
+            targetPalette = OceanColors_p;
+            thisinc = 1;
+            thishue = 192;
+            thissat = 255;
+            thisfade = 2;
+            huediff = 255;
+            break; // You can change values here, one at a time , or altogether.
+        case 5:
+            targetPalette = LavaColors_p;
+            thisinc = 2;
+            thishue = 128;
+            thisfade = 8;
+            huediff = 64;
+            break;
+        case 10:
+            targetPalette = ForestColors_p;
+            thisinc = 1;
+            thishue = random16(255);
+            thisfade = 1;
+            huediff = 16;
+            break; // Only gets called once, and not continuously for the next several seconds. Therefore, no rainbows.
+        case 20:
+            break; // Here's the matching 15 for the other one.
+        }
+    }
+
+} // ChangeMe()
+
+void readbutton()
+{ // Read the button and increase the mode.
+
+    myBtn.read();
+
+    if (myBtn.wasReleased())
+    {
+        if (longpress == 1)
+        {
+            EEPROM.write(eepaddress, ledMode);
+            Serial.print("Writing: ");
+        }
+        else
+        {
+            ledMode = ledMode > maxMode - 1 ? 0 : ledMode + 1; // Reset to 0 only during a mode change.
+        }
+        longpress = 0;
+        Serial.println(ledMode);
+    }
+
+    if (myBtn.pressedFor(1000))
+    {
+        longpress = 1;
+    }
+
+} // readbutton()
+
+void dot_beat()
+{
+
+    uint8_t inner = beatsin8(bpm, NUM_LEDS / 4, NUM_LEDS / 4 * 3);  // Move 1/4 to 3/4
+    uint8_t outer = beatsin8(bpm, 0, NUM_LEDS - 1);                 // Move entire length
+    uint8_t middle = beatsin8(bpm, NUM_LEDS / 3, NUM_LEDS / 3 * 2); // Move 1/3 to 2/3
+
+    leds[middle] = CRGB::Purple;
+    leds[inner] = CRGB::Blue;
+    leds[outer] = CRGB::Aqua;
+
+    nscale8(leds, NUM_LEDS, fadeval); // Fade the entire array. Or for just a few LED's, use  nscale8(&leds[2], 5, fadeval);
+
+} // dot_beat()
+
+void blendwave()
+{
+
+    speed = beatsin8(6, 0, 255);
+
+    clr1 = blend(CHSV(beatsin8(3, 0, 255), 255, 255), CHSV(beatsin8(4, 0, 255), 255, 255), speed);
+    clr2 = blend(CHSV(beatsin8(4, 0, 255), 255, 255), CHSV(beatsin8(3, 0, 255), 255, 255), speed);
+
+    loc1 = beatsin8(10, 0, NUM_LEDS - 1);
+
+    fill_gradient_RGB(leds, 0, clr2, loc1, clr1);
+    fill_gradient_RGB(leds, loc1, clr2, NUM_LEDS - 1, clr1);
+
+} // blendwave()
+
+void animationA()
+{ // running red stripe.
+    for (int i = 0; i < NUM_LEDS; i++)
+    {
+        uint8_t red = (millis() / 5) + (i * 12); // speed, length
+        if (red > 128)
+            red = 0;[]
+        leds[i] = ColorFromPalette(currentPalette, red, red, currentBlending);
+    }
+} // animationA()
+
+void fill_grad()
+{
+
+    uint8_t starthue = beatsin8(5, 0, 255);
+    uint8_t endhue = beatsin8(7, 0, 255);
+
+    if (starthue < endhue)
+    {
+        fill_gradient(leds, NUM_LEDS, CHSV(starthue, 255, 255), CHSV(endhue, 255, 255), FORWARD_HUES); // If we don't have this, the colour fill will flip around.
+    }
+    else
+    {
+        fill_gradient(leds, NUM_LEDS, CHSV(starthue, 255, 255), CHSV(endhue, 255, 255), BACKWARD_HUES);
+    }
+
+} // fill_grad()
